@@ -1,6 +1,5 @@
 #![no_std]
 
-use embedded_hal::SPI;
 use embedded_hal::spi::{SpiDevice, SpiBus};
 use measurements::Voltage;
 
@@ -20,12 +19,12 @@ pub struct MCP346x<SPI, MODE> {
     address: u8
 }
 
-fn generate_fast_command_byte(device_address: u8, command: u8) -> u8 {
-    return (device_address << 6) || (command << 2) || 0b00000000;
+fn generate_fast_command_byte(device_address: u8, command: u8) -> [u8;1] {
+    return (device_address << 6) | (command << 2) | 0b00000000;
 }
 
-fn generate_register_command_byte(device_address: u8, register_address: u8, command_type: u8) -> u8 {
-    return (device_address << 6) || (register_address << 2) || command_type;
+fn generate_register_command_byte(device_address: u8, register_address: u8, command_type: u8) -> [u8;1] {
+    return (device_address << 6) | (register_address << 2) | command_type;
 }
 
 
@@ -51,24 +50,21 @@ where
         Ok(())
     }
 
-    fn static_read(&self, register: u8) -> Result<[u32;16], Error<E>> {
-        let command: u8 = generate_register_command_byte(self.address, register, 0b01);
-        let mut buf: [u32;16] = [0;16];
-        self.spi.transfer(&mut buf, &command)?;
+    fn static_read(&self, register: u8, buf: &mut [u8]) -> Result<&[u8], Error<E>> {
+        let command: [u8;1] = generate_register_command_byte(self.address, register, 0b01);
+        self.spi.transfer(&mut buf, &command).map_err(|e| Error::Spi(e));
         Ok(buf)
     }
 
-    fn incremental_read(&self, register: u8) -> Result<[u32;16], Error<E>> {
-        let command: u8 = generate_register_command_byte(self.address, register, 0b01);
-        let mut buf: [u32;16] = [0;16];
-        self.spi.transfer(&mut buf, &command)?;
+    fn incremental_read(&self, register: u8, buf: &mut [u8]) -> Result<&[u8], Error<E>> {
+        let command: [u8;1] = generate_register_command_byte(self.address, register, 0b11);
+        self.spi.transfer(&mut buf, &command).map_err(|e| Error::Spi(e));
         Ok(buf)
     }
 
-    fn static_write(&self, register: u8) -> Result<[u32;16], Error<E>> {
-        let command: u8 = generate_register_command_byte(self.address, register, 0b01);
-        let mut buf: [u32;16] = [0;16];
-        self.spi.transfer(&mut buf, &command)?;
+    fn incremental_write(&self, register: u8, buf: &mut[u8]) -> Result<&[u8], Error<E>> {
+        let command: [u8;1] = generate_register_command_byte(self.address, register, 0b10);
+        self.spi.transfer(buf, &command).map_err(|e| Error::Spi(e));
         Ok(buf)
     }
 
@@ -101,38 +97,38 @@ where
     
     pub fn measure(&self) -> Result<Voltage, Error<E>> {
         let buf: [u8;4] = [0;4];
-        let command: u8 = generate_fast_command_byte(, command);
+        let command: [u8;1] = generate_fast_command_byte(, command);
         self.spi.transfer(&mut buf, &command);
         Ok(Voltage::from_volts(u32::from_be_bytes(buf) as f64))
     }
 
-    pub fn start_conversion(&self) -> Result<Ok(()), Error<E>> {
-        let command: u8 = generate_fast_command_byte(self.address, 0b1010);
-        self.spi.write(&command)?;
+    pub fn start_conversion(&self) -> Result<(), Error<E>> {
+        let command: [u8;1] = generate_fast_command_byte(self.address, 0b1010);
+        self.spi.write(&command).map_err(|e| Error::Spi(e));
         Ok(())
     }
     
-    pub fn standby(&self) -> Result<Ok(()), Error<E>> {
-        let command: u8 = generate_fast_command_byte(self.address, 0b1011);
-        self.spi.write(&command)?;
+    pub fn standby(&self) -> Result<(), Error<E>> {
+        let command: [u8;1] = generate_fast_command_byte(self.address, 0b1011);
+        self.spi.write(&command).map_err(|e| Error::Spi(e));
         Ok(())
     }
 
-    pub fn shutdown(&self) -> Result<Ok(()), Error<E>> {
-        let command: u8 = generate_fast_command_byte(self.address, 0b1100);
-        self.spi.write(&command)?;
+    pub fn shutdown(&self) -> Result<(), Error<E>> {
+        let command: [u8;1] = generate_fast_command_byte(self.address, 0b1100);
+        self.spi.write(&command).map_err(|e| Error::Spi(e));
         Ok(())
     }
     
-    pub fn full_shutdown(self) -> Result<Ok(()), Error<E>> {
-        let command: u8 = generate_fast_command_byte(self.address, 0b1101);
-        self.spi.write(&command)?;
+    pub fn full_shutdown(self) -> Result<(), Error<E>> {
+        let command: [u8;1] = generate_fast_command_byte(self.address, 0b1101);
+        self.spi.write(&command).map_err(|e| Error::Spi(e));
         Ok(())
     }
     
     pub fn reset(&self) -> Result<MCP346x<SPI, Unconfigured>, Error<E>> {
-        let command: u8 = generate_fast_command_byte(self.address, 0b1110);
-        self.spi.write(&command)?;
+        let command: [u8;1] = generate_fast_command_byte(self.address, 0b1110);
+        self.spi.write(&command).map_err(|e| Error::Spi(e));
         Ok(MCP346x { spi: self.spi, mode: Unconfigured, address: self.address })
     }
 }
