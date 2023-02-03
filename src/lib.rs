@@ -10,18 +10,18 @@
 //! use mcp346x::MCP346x;
 //!
 //! # fn main() {
-//! 
+//!
 //! // Initialize gpio pins, clocks, etc.
-//! 
+//!
 //! let spi_pins = (sck, miso, mosi);
 //! let spi = Spi::new(p.SPI0, spi_pins, Frequency::K500, MODE_0);
-//! 
+//!
 //! let address = 0b01; // This is the default address for most chips
 //! let mut adc = MCP346x::new(spi, address).into_continuous_mode().unwrap();
-//! 
+//!
 //! adc.set_clock_source(mcp346x::ClockSource::Internal).unwrap();
 //! adc.set_irq_internal_pullup(true).unwrap();
-//! 
+//!
 //! let voltage = adc.measure().unwrap();
 //! # }
 //! ```
@@ -30,8 +30,8 @@
 
 use bitflags::bitflags;
 use embedded_hal as hal;
-use hal::spi::blocking::Transfer;
-use hal::digital::blocking::OutputPin;
+use hal::blocking::spi::Transfer;
+use hal::digital::v2::OutputPin;
 use measurements::Voltage;
 
 #[derive(Debug)]
@@ -46,12 +46,12 @@ pub enum Error<E, PE> {
 
 pub enum ClockSource {
     Internal = 1,
-    External = 0
+    External = 0,
 }
 
 pub enum Input {
-    VInPlus = 4,
-    VInMinus = 0
+    VInPlus = 0b0100,
+    VInMinus = 0b0000,
 }
 
 pub enum Channel {
@@ -69,7 +69,7 @@ pub enum Channel {
     REFINMinus = 0b1100,
     TEMPDiodeP = 0b1101,
     TEMPDiodeM = 0b1110,
-    VCM = 0b1111
+    VCM = 0b1111,
 }
 
 bitflags! {
@@ -85,10 +85,11 @@ pub struct MCP346x<SPI, CS, MODE> {
     cs: CS,
     _mode: MODE,
     address: u8,
+    status: Option<StatusRegister>,
 }
 
 fn generate_fast_command_byte(device_address: u8, command: u8) -> [u8; 1] {
-    return [(device_address << 6) | (command << 2) | 0b00000000; 1];
+    [(device_address << 6) | (command << 2); 1]
 }
 
 fn generate_register_command_byte(
@@ -96,7 +97,7 @@ fn generate_register_command_byte(
     register_address: u8,
     command_type: u8,
 ) -> [u8; 1] {
-    return [(device_address << 6) | (register_address << 2) | command_type; 1];
+    [(device_address << 6) | (register_address << 2) | command_type; 1]
 }
 
 impl<SPI, CS, E> MCP346x<SPI, CS, Unconfigured>
@@ -110,6 +111,7 @@ where
             cs,
             _mode: Unconfigured,
             address,
+            status: None,
         }
     }
 }
@@ -122,20 +124,25 @@ where
     fn spi_write(&mut self, write_buffer: &[u8]) -> Result<(), Error<E, PE>> {
         self.cs.set_low().map_err(Error::Pin)?;
         let mut transfer_buffer = [0; 40];
-        let mut transfer_slice = &mut transfer_buffer[0..write_buffer.len()];
+        let transfer_slice = &mut transfer_buffer[0..write_buffer.len()];
         transfer_slice.copy_from_slice(write_buffer);
-        self.spi.transfer(&mut transfer_slice).map_err( Error::Spi)?;
+        self.spi.transfer(transfer_slice).map_err(Error::Spi)?;
         self.cs.set_high().map_err(Error::Pin)?;
         Ok(())
     }
 
-    fn spi_transfer(&mut self, read_buffer: &mut [u8], write_buffer: &[u8]) -> Result<(), Error<E, PE>> {
+    fn spi_transfer(
+        &mut self,
+        read_buffer: &mut [u8],
+        write_buffer: &[u8],
+    ) -> Result<(), Error<E, PE>> {
         self.cs.set_low().map_err(Error::Pin)?;
         let mut transfer_buffer = [0; 40];
         let transfer_slice = &mut transfer_buffer[0..write_buffer.len()];
         transfer_slice.copy_from_slice(write_buffer);
         self.spi
-            .transfer(&mut transfer_buffer[0..read_buffer.len().max(write_buffer.len())]).map_err(Error::Spi)?;
+            .transfer(&mut transfer_buffer[0..read_buffer.len().max(write_buffer.len())])
+            .map_err(Error::Spi)?;
         read_buffer.copy_from_slice(&transfer_buffer[0..read_buffer.len()]);
         self.cs.set_high().map_err(Error::Pin)?;
         Ok(())
@@ -168,18 +175,12 @@ where
         Ok(())
     }
 
-    fn incremental_read(&mut self, register: u8, buf: &mut [u8]) -> Result<(), Error<E, PE>> {
-        let command: [u8; 1] = generate_register_command_byte(self.address, register, 0b11);
-        self.spi_transfer(buf, &command)?;
-        Ok(())
-    }
-
     fn incremental_write(&mut self, register: u8, buf: &mut [u8]) -> Result<(), Error<E, PE>> {
         let command: [u8; 1] = generate_register_command_byte(self.address, register, 0b10);
         let mut buffer: [u8; 10] = [0; 10];
         let _ = &mut buffer[0..1].copy_from_slice(&command);
-        let _ = &mut buffer[1..buf.len()+1].copy_from_slice(buf);
-        self.spi_write(&buffer[0..buf.len()+1])?;
+        let _ = &mut buffer[1..buf.len() + 1].copy_from_slice(buf);
+        self.spi_write(&buffer[0..buf.len() + 1])?;
         Ok(())
     }
 
@@ -190,13 +191,16 @@ where
         Ok(measurement)
     }
 
-    pub fn into_continuous_mode(mut self) -> Result<MCP346x<SPI, CS, ContinuousMode>, Error<E, PE>> {
+    pub fn into_continuous_mode(
+        mut self,
+    ) -> Result<MCP346x<SPI, CS, ContinuousMode>, Error<E, PE>> {
         self.set_mode(0b00)?;
         Ok(MCP346x {
             spi: self.spi,
             cs: self.cs,
             _mode: ContinuousMode,
             address: self.address,
+            status: self.status,
         })
     }
 
@@ -207,6 +211,7 @@ where
             cs: self.cs,
             _mode: ScanMode,
             address: self.address,
+            status: self.status,
         })
     }
 
@@ -217,9 +222,9 @@ where
             cs: self.cs,
             _mode: OneShotMode,
             address: self.address,
+            status: self.status,
         })
     }
-
 
     /// Sets the clock source.
     /// MCP346x can be used with an internal clock or an external
@@ -233,7 +238,7 @@ where
     }
 
     /// Sets the irq internal pullup.
-    /// This is nessecary if the irq pin (Pin 17) is not 
+    /// This is nessecary if the irq pin (Pin 17) is not
     /// connected and no external pullup is used for this pin.
     pub fn set_irq_internal_pullup(&mut self, pullup: bool) -> Result<(), Error<E, PE>> {
         let mut buf = [0; 1];
@@ -243,9 +248,8 @@ where
         Ok(())
     }
 
-    
     /// Sets the mux input for one of the two Inputs.
-    /// 
+    ///
     /// # Arguments
     /// * `input` one of the two Inputs VIn+ or VIn-
     /// * `channel` the channel to be connected to the Input
@@ -296,16 +300,16 @@ where
             cs: self.cs,
             _mode: Unconfigured,
             address: self.address,
+            status: self.status,
         })
     }
 }
 
-impl<SPI, CS, E, PE> MCP346x<SPI, CS, ContinuousMode> 
+impl<SPI, CS, E, PE> MCP346x<SPI, CS, ContinuousMode>
 where
     SPI: Transfer<u8, Error = E>,
     CS: OutputPin<Error = PE>,
 {
-
     pub fn measure(&mut self) -> Result<Voltage, Error<E, PE>> {
         self.int_measure()
     }
@@ -313,15 +317,13 @@ where
     pub fn start_conversion(&mut self) -> Result<(), Error<E, PE>> {
         self.int_start_conversion()
     }
-
 }
 
-impl<SPI, CS, E, PE> MCP346x<SPI, CS, OneShotMode> 
+impl<SPI, CS, E, PE> MCP346x<SPI, CS, OneShotMode>
 where
     SPI: Transfer<u8, Error = E>,
     CS: OutputPin<Error = PE>,
 {
-
     pub fn measure(&mut self) -> Result<Voltage, Error<E, PE>> {
         self.start_conversion()?;
         self.int_measure()
@@ -330,15 +332,13 @@ where
     pub fn start_conversion(&mut self) -> Result<(), Error<E, PE>> {
         self.int_start_conversion()
     }
-
 }
 
-impl<SPI, CS, E, PE> MCP346x<SPI, CS, ScanMode> 
+impl<SPI, CS, E, PE> MCP346x<SPI, CS, ScanMode>
 where
     SPI: Transfer<u8, Error = E>,
     CS: OutputPin<Error = PE>,
 {
-
     pub fn measure(&mut self) -> Result<Voltage, Error<E, PE>> {
         self.int_measure()
     }
@@ -346,9 +346,7 @@ where
     pub fn start_conversion(&mut self) -> Result<(), Error<E, PE>> {
         self.int_start_conversion()
     }
-
 }
-
 
 pub struct ContinuousMode;
 pub struct OneShotMode;
