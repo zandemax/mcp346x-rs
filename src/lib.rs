@@ -1,9 +1,37 @@
+//! A platform agnostic Rust driver for the MCP346[1/2/4], based on the
+//! [`embedded-hal`](https://github.com/rust-embedded/embedded-hal) traits.
+//!
+//! ## Usage
+//!
+//! ```no_run
+//! use embedded_hal::spi::MODE_0;
+//! use stm32f3_discovery::stm32f3xx_hal as hal;
+//! use hal::spi::Spi;
+//! use mcp346x::MCP346x;
+//!
+//! # fn main() {
+//! 
+//! // Initialize gpio pins, clocks, etc.
+//! 
+//! let spi_pins = (sck, miso, mosi);
+//! let spi = Spi::new(p.SPI0, spi_pins, Frequency::K500, MODE_0);
+//! 
+//! let address = 0b01; // This is the default address for most chips
+//! let mut adc = MCP346x::new(spi, address).into_continuous_mode().unwrap();
+//! 
+//! adc.set_clock_source(mcp346x::ClockSource::Internal).unwrap();
+//! adc.set_irq_internal_pullup(true).unwrap();
+//! 
+//! let voltage = adc.measure().unwrap();
+//! # }
+//! ```
+
 #![no_std]
 
 use bitflags::bitflags;
 use embedded_hal as hal;
-use hal::blocking::spi::Transfer;
-use hal::digital::v2::OutputPin;
+use hal::spi::blocking::Transfer;
+use hal::digital::blocking::OutputPin;
 use measurements::Voltage;
 
 #[derive(Debug)]
@@ -17,13 +45,13 @@ pub enum Error<E, PE> {
 }
 
 pub enum ClockSource {
-    Internal,
-    External
+    Internal = 1,
+    External = 0
 }
 
 pub enum Input {
-    VInPlus,
-    VInMinus
+    VInPlus = 4,
+    VInMinus = 0
 }
 
 pub enum Channel {
@@ -46,9 +74,9 @@ pub enum Channel {
 
 bitflags! {
     pub struct StatusRegister: u8 {
-        const DR_STATUS = 0b00000100;
-        const CRCCFG_STATUS = 0b00000010;
-        const POR_STATUS = 0b00000001;
+        const DR = 0b00000100;
+        const CRCCFG = 0b00000010;
+        const POR = 0b00000001;
     }
 }
 
@@ -134,19 +162,19 @@ where
         Ok(())
     }
 
-    pub fn static_read(&mut self, register: u8, buf: &mut [u8]) -> Result<(), Error<E, PE>> {
+    fn static_read(&mut self, register: u8, buf: &mut [u8]) -> Result<(), Error<E, PE>> {
         let command: [u8; 1] = generate_register_command_byte(self.address, register, 0b01);
         let _ = self.tranfer_with_status_register(buf, &command);
         Ok(())
     }
 
-    pub fn incremental_read(&mut self, register: u8, buf: &mut [u8]) -> Result<(), Error<E, PE>> {
+    fn incremental_read(&mut self, register: u8, buf: &mut [u8]) -> Result<(), Error<E, PE>> {
         let command: [u8; 1] = generate_register_command_byte(self.address, register, 0b11);
         self.spi_transfer(buf, &command)?;
         Ok(())
     }
 
-    pub fn incremental_write(&mut self, register: u8, buf: &mut [u8]) -> Result<(), Error<E, PE>> {
+    fn incremental_write(&mut self, register: u8, buf: &mut [u8]) -> Result<(), Error<E, PE>> {
         let command: [u8; 1] = generate_register_command_byte(self.address, register, 0b10);
         let mut buffer: [u8; 10] = [0; 10];
         let _ = &mut buffer[0..1].copy_from_slice(&command);
@@ -192,23 +220,42 @@ where
         })
     }
 
+
+    /// Sets the clock source.
+    /// MCP346x can be used with an internal clock or an external
+    /// one connected to Pin 18.
     pub fn set_clock_source(&mut self, clock_source: ClockSource) -> Result<(), Error<E, PE>> {
-        let mut buf: [u8; 1] = match clock_source {
-            ClockSource::Internal => [0b11100011;1],
-            ClockSource::External => [0b11000011;1]
-        };
+        let mut buf: [u8; 1] = [0; 1];
+        self.static_read(0x01, &mut buf)?;
+        buf[0] = ((clock_source as u8) << 4) | (!(0b11 << 4) & buf[0]);
         self.incremental_write(0x01, &mut buf)?;
         Ok(())
     }
 
-    pub fn set_irq_internal_pullup(&mut self) -> Result<(), Error<E, PE>> {
-        let mut buf = [0b00000111, 1];
+    /// Sets the irq internal pullup.
+    /// This is nessecary if the irq pin (Pin 17) is not 
+    /// connected and no external pullup is used for this pin.
+    pub fn set_irq_internal_pullup(&mut self, pullup: bool) -> Result<(), Error<E, PE>> {
+        let mut buf = [0; 1];
+        self.static_read(0x05, &mut buf)?;
+        buf[0] = ((pullup as u8) << 3) | (!(0b1 << 3) & buf[0]);
         self.incremental_write(0x5, &mut buf)?;
         Ok(())
     }
 
-    pub fn set_mux_input(&mut self, _input: Input, _channel: Channel) -> Result<(), Error<E, PE>> {
-//        let mut current_register = self.register_read(0x06, 1)?;
+    
+    /// Sets the mux input for one of the two Inputs.
+    /// 
+    /// # Arguments
+    /// * `input` one of the two Inputs VIn+ or VIn-
+    /// * `channel` the channel to be connected to the Input
+    ///
+    pub fn set_mux_input(&mut self, input: Input, channel: Channel) -> Result<(), Error<E, PE>> {
+        let mut buf = [0; 1];
+        self.static_read(0x06, &mut buf)?;
+        let shift = input as u8;
+        buf[0] = ((channel as u8) << shift) | ((0b1111 << shift) & buf[0]);
+        self.incremental_write(0x06, &mut buf)?;
         Ok(())
     }
 
@@ -268,6 +315,40 @@ where
     }
 
 }
+
+impl<SPI, CS, E, PE> MCP346x<SPI, CS, OneShotMode> 
+where
+    SPI: Transfer<u8, Error = E>,
+    CS: OutputPin<Error = PE>,
+{
+
+    pub fn measure(&mut self) -> Result<Voltage, Error<E, PE>> {
+        self.start_conversion()?;
+        self.int_measure()
+    }
+
+    pub fn start_conversion(&mut self) -> Result<(), Error<E, PE>> {
+        self.int_start_conversion()
+    }
+
+}
+
+impl<SPI, CS, E, PE> MCP346x<SPI, CS, ScanMode> 
+where
+    SPI: Transfer<u8, Error = E>,
+    CS: OutputPin<Error = PE>,
+{
+
+    pub fn measure(&mut self) -> Result<Voltage, Error<E, PE>> {
+        self.int_measure()
+    }
+
+    pub fn start_conversion(&mut self) -> Result<(), Error<E, PE>> {
+        self.int_start_conversion()
+    }
+
+}
+
 
 pub struct ContinuousMode;
 pub struct OneShotMode;
