@@ -9,7 +9,7 @@
 //! use hal::spi::Spi;
 //! use mcp346x::MCP346x;
 //!
-//! # fn main() {
+//! # fn main() -> Result<(), Box<dyn Error>> {
 //!
 //! // Initialize gpio pins, clocks, etc.
 //!
@@ -17,12 +17,12 @@
 //! let spi = Spi::new(p.SPI0, spi_pins, Frequency::K500, MODE_0);
 //!
 //! let address = 0b01; // This is the default address for most chips
-//! let mut adc = MCP346x::new(spi, address).into_continuous_mode().unwrap();
+//! let mut adc = MCP346x::new(spi, address).into_continuous_mode()?;
 //!
-//! adc.set_clock_source(mcp346x::ClockSource::Internal).unwrap();
-//! adc.set_irq_internal_pullup(true).unwrap();
+//! adc.set_clock_source(mcp346x::ClockSource::Internal)?;
+//! adc.set_irq_internal_pullup(true)?;
 //!
-//! let voltage = adc.measure().unwrap();
+//! let voltage = adc.measure()?;
 //! # }
 //! ```
 
