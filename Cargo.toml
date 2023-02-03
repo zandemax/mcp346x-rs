@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 authors = ["zdmx <hi@zdmx.me>"]
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/zandemax/mcp346x-rs"
+description = "Platform-agnostic driver for MCP346x Sigma-Delta ADC"
 keywords = ["mcp3461", "microchip", "driver", "adc", "embedded-hal-driver"]
 categories = ["embedded", "hardware-support", "no-std"]
 
