@@ -17,17 +17,6 @@ Currently, you can:
 
 ## Usage
 
-First of all, in order to get correct readings, the ADC needs to be calibrated according to the following procedure:
-
-1. Set the calibration offsets and multipliers to their default values.
-2. Remove any load from the ADC.
-3. Calculate the offsets as the average of the ADC readings with no load applied.
-4. Set the calculated calibration offsets, leaving the multipliers to their default value.
-5. Apply a known load to the ADC.
-6. Calculate the multipliers by dividing the known load by the average of the ADC readings with the known load applied.
-
-The followings are two minimal examples to get readings from the ADC, both in a single-phase ADC configuration and a poly-phase multi ADCs configuration.
-
 ### Single Measurement
 
 ```rust ignore
